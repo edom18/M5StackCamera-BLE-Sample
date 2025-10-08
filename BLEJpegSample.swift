@@ -129,6 +129,7 @@ public final class BLEJpegSample: NSObject, ObservableObject {
   }
 
   private func updateStatus(_ message: String) {
+    print(message)
     DispatchQueue.main.async {
       self.statusMessage = message
     }
@@ -145,6 +146,7 @@ public final class BLEJpegSample: NSObject, ObservableObject {
   private func finalizeTransfer() {
     guard let expected = expectedImageLength,
           transferBuffer.count >= expected else {
+      print("[BLEJpegSample] finalizeTransfer skipped; buffer=\(transferBuffer.count) expected=\(expectedImageLength ?? -1)")
       return
     }
     let jpegSlice = transferBuffer.prefix(expected)
@@ -159,6 +161,7 @@ public final class BLEJpegSample: NSObject, ObservableObject {
     expectedImageLength = nil
 
     guard hasValidHeader, hasValidFooter else {
+      print("[BLEJpegSample] JPEG markers invalid header=\(hasValidHeader) footer=\(hasValidFooter)")
       updateStatus("JPEG invalid (missing markers)")
       DispatchQueue.main.async {
         self.lastJpegData = nil
@@ -176,20 +179,22 @@ public final class BLEJpegSample: NSObject, ObservableObject {
 #endif
       self.statusMessage = "JPEG received (\(jpegData.count) bytes)"
     }
+    print("[BLEJpegSample] JPEG transfer complete (\(jpegData.count) bytes)")
   }
 
   private func scheduleTransferCompletion() {
     chunkTimeoutWorkItem?.cancel()
     let workItem = DispatchWorkItem { [weak self] in
-      self?.centralQueue.async {
-        self?.finalizeTransfer()
-      }
+      guard let self = self else { return }
+      print("[BLEJpegSample] Chunk timeout fired, finalizing transfer")
+      self.finalizeTransfer()
     }
     chunkTimeoutWorkItem = workItem
     centralQueue.asyncAfter(deadline: .now() + chunkTimeout, execute: workItem)
   }
 
   private func handleJpegNotification(_ data: Data) {
+    print("[BLEJpegSample] Received notification with \(data.count) bytes")
     if expectedImageLength == nil {
       headerBuffer.append(data)
       let requiredHeaderBytes = 8
@@ -211,20 +216,26 @@ public final class BLEJpegSample: NSObject, ObservableObject {
       for byte in lengthBytes {
         length = (length << 8) | UInt32(byte)
       }
-      expectedImageLength = Int(length)
-      updateStatus("JPEG header received (\(length) bytes expected)")
+      let expectedCount = Int(length)
+      expectedImageLength = expectedCount
+      let signatureString = String(data: signature, encoding: .ascii) ?? "JPEG"
+      print("[BLEJpegSample] Header signature=\(signatureString) expected=\(expectedCount) bytes")
+      updateStatus("Header received: \(expectedCount) bytes")
 
       let remainder = headerBuffer.dropFirst(requiredHeaderBytes)
       headerBuffer.removeAll(keepingCapacity: false)
       if !remainder.isEmpty {
         transferBuffer.append(contentsOf: remainder)
+        print("[BLEJpegSample] Appended remainder \(remainder.count) bytes")
       }
 
       if let expected = expectedImageLength {
         if transferBuffer.count >= expected {
           finalizeTransfer()
         } else {
-          updateStatus("Receiving JPEG (\(transferBuffer.count)/\(expected))")
+          let received = transferBuffer.count
+          print("[BLEJpegSample] After header remainder -> \(received)/\(expected) bytes")
+          updateStatus("Receiving JPEG (\(received)/\(expected))")
           scheduleTransferCompletion()
         }
       }
@@ -237,10 +248,12 @@ public final class BLEJpegSample: NSObject, ObservableObject {
       return
     }
 
-    if transferBuffer.count >= expected {
+    let received = transferBuffer.count
+    print("[BLEJpegSample] Chunk received, total \(received)/\(expected)")
+    if received >= expected {
       finalizeTransfer()
     } else {
-      updateStatus("Receiving JPEG (\(transferBuffer.count)/\(expected))")
+      updateStatus("Receiving JPEG (\(received)/\(expected))")
       scheduleTransferCompletion()
     }
   }
@@ -354,12 +367,16 @@ extension BLEJpegSample: CBPeripheralDelegate {
       case jpegCharacteristicUUID:
         jpegCharacteristic = characteristic
         peripheral.setNotifyValue(true, for: characteristic)
-        updateState(.subscribed)
-        updateStatus("Subscribed to JPEG notifications")
+        updateStatus("Subscribing to JPEG notifications")
+        print("[BLEJpegSample] CCCD subscription state: notify=\(characteristic.properties.contains(.notify)) isNotifying=\(characteristic.isNotifying)")
       default:
         continue
       }
     }
+    
+    if controlCharacteristic != nil && jpegCharacteristic != nil {
+      updateState(.subscribed)
+      updateStatus("Ready for JPEG transfer")
   }
 
   public func peripheral(_ peripheral: CBPeripheral,
@@ -367,12 +384,24 @@ extension BLEJpegSample: CBPeripheralDelegate {
                          error: Error?) {
     if let error = error {
       updateStatus("Notify failed: \(error.localizedDescription)")
+      print("[BLEJpegSample] CCCD update error: \(error.localizedDescription)")
       return
     }
-    if characteristic.isNotifying {
+    if characteristic.uuid == jpegCharacteristicUUID {
+      if characteristic.isNotifying {
+        updateState(.subscribed)
+        updateStatus("JPEG notifications active")
+        print("[BLEJpegSample] JPEG notifications are now active")
+      } else {
+        updateStatus("JPEG notifications stopped")
+        print("[BLEJpegSample] JPEG notifications stopped")
+      }
+    } else if characteristic.isNotifying {
       updateStatus("Notify active for \(characteristic.uuid.uuidString)")
+      print("[BLEJpegSample] Notify active for \(characteristic.uuid.uuidString)")
     } else {
       updateStatus("Notify stopped for \(characteristic.uuid.uuidString)")
+      print("[BLEJpegSample] Notify stopped for \(characteristic.uuid.uuidString)")
     }
   }
 

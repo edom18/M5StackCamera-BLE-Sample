@@ -3,6 +3,7 @@
 #include <BLEUtils.h>
 #include <BLEServer.h>
 #include <BLE2902.h>
+#include <esp_gatt_defs.h>
 
 #include <algorithm>
 #include <cstring>
@@ -14,8 +15,6 @@
 #define JPEG_CHARACTERISTIC_UUID     "c9d1cba2-1f32-4fb0-b6bc-9b73c7d8b4e2"
 #define SERVER_NAME                  "M5CoreS3"
 
-/* ================ JPEG Payload (base64) ================ */
-static const char kJpegBase64[] = R"(/9j/4QAYRXhpZgAASUkqAAgAAAAAAAAAAAAAAP/sABFEdWNreQABAAQAAABQAAD/4QMwaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wLwA8P3hwYWNrZXQgYmVnaW49Iu+7vyIgaWQ9Ilc1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCI/PiA8eDp4bXBtZXRhIHhtbG5zOng9ImFkb2JlOm5zOm1ldGEvIiB4OnhtcHRrPSJBZG9iZSBYTVAgQ29yZSA5LjEtYzAwMyA3OS45NjkwYTg3ZmMsIDIwMjUvMDMvMDYtMjA6NTA6MTYgICAgICAgICI+IDxyZGY6UkRGIHhtbG5zOnJkZj0iaHR0cDovL3d3dy53My5vcmcvMTk5OS8wMi8yMi1yZGYtc3ludGF4LW5zIyI+IDxyZGY6RGVzY3JpcHRpb24gcmRmOmFib3V0PSIiIHhtbG5zOnhtcD0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wLyIgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iIHhtbG5zOnN0UmVmPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VSZWYjIiB4bXA6Q3JlYXRvclRvb2w9IkFkb2JlIFBob3Rvc2hvcCAyNi4xMSAoV2luZG93cykiIHhtcE1NOkluc3RhbmNlSUQ9InhtcC5paWQ6MzlCRjRBNURBNDI0MTFGMDg0NzI4MzQwQTg3QUM1MjgiIHhtcE1NOkRvY3VtZW50SUQ9InhtcC5kaWQ6MzlCRjRBNUVBNDI0MTFGMDg0NzI4MzQwQTg3QUM1MjgiPiA8eG1wTU06RGVyaXZlZEZyb20gc3RSZWY6aW5zdGFuY2VJRD0ieG1wLmlpZDozOUJGNEE1QkE0MjQxMUYwODQ3MjgzNDBBODdBQzUyOCIgc3RSZWY6ZG9jdW1lbnRJRD0ieG1wLmRpZDozOUJGNEE1Q0E0MjQxMUYwODQ3MjgzNDBBODdBQzUyOCIvPiA8L3JkZjpEZXNjcmlwdGlvbj4gPC9yZGY6UkRGPiA8L3g6eG1wbWV0YT4gPD94cGFja2V0IGVuZD0iciI/Pv/uAA5BZG9iZQBkwAAAAAH/2wCEAAICAgICAgICAgIDAgIC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)";
 
 /* ================ BLE State ================ */
 BLEServer *pServer = nullptr;
@@ -25,60 +24,6 @@ bool deviceConnected = false;
 static std::vector<uint8_t> gJpegBuffer;
 
 int counter = 0;
-
-static inline int8_t decodeBase64Char(unsigned char c) {
-  if (c >= 'A' && c <= 'Z') {
-    return c - 'A';
-  }
-  if (c >= 'a' && c <= 'z') {
-    return c - 'a' + 26;
-  }
-  if (c >= '0' && c <= '9') {
-    return c - '0' + 52;
-  }
-  if (c == '+') {
-    return 62;
-  }
-  if (c == '/') {
-    return 63;
-  }
-  return -1;
-}
-
-static std::vector<uint8_t> decodeBase64(const char *input) {
-  std::vector<uint8_t> output;
-  output.reserve((std::strlen(input) * 3) / 4);
-  int val = 0;
-  int bits = -8;
-  const unsigned char *ptr = reinterpret_cast<const unsigned char *>(input);
-  while (*ptr) {
-    unsigned char c = *ptr++;
-    if (c == '=') {
-      break;
-    }
-    if (c == '\n' || c == '\r' || c == ' ' || c == '\t') {
-      continue;
-    }
-    int8_t decoded = decodeBase64Char(c);
-    if (decoded < 0) {
-      continue;
-    }
-    val = (val << 6) + decoded;
-    bits += 6;
-    if (bits >= 0) {
-      output.push_back(static_cast<uint8_t>((val >> bits) & 0xFF));
-      bits -= 8;
-    }
-  }
-  return output;
-}
-
-static void ensureJpegLoaded() {
-  if (!gJpegBuffer.empty()) {
-    return;
-  }
-  gJpegBuffer = decodeBase64(kJpegBase64);
-}
 
 void sendJpegToCentral();
 
@@ -126,14 +71,40 @@ class ControlCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
+static bool notifyChunk(BLECharacteristic *characteristic,
+                        const uint8_t *data,
+                        size_t length,
+                        uint32_t gapMs = 20) {
+  if (!deviceConnected || characteristic == nullptr || data == nullptr || length == 0) {
+    return false;
+  }
+  characteristic->setValue(const_cast<uint8_t *>(data), length);
+  size_t storedLength = characteristic->getLength();
+  Serial.printf("notify len=%u stored=%u first=%02X%02X\n",
+                static_cast<unsigned>(length),
+                static_cast<unsigned>(storedLength),
+                length > 0 ? data[0] : 0,
+                length > 1 ? data[1] : 0);
+  characteristic->notify();
+  delay(gapMs);
+  return true;
+}
+
 /* ================ Arduino ================ */
 void setupBle();
 
 void setup() {
+  Serial.begin(115200);
+
   M5.begin();
   M5.Lcd.setCursor(0, 0);
   M5.Lcd.setTextSize(2);
   M5.Lcd.println("Start!");
+
+  if (!CoreS3.Camera.begin()) {
+    CoreS3.Display.drawString("Camera Init Fail", CoreS3.Display.width() / 2, CoreS3.Display.height() / 2);
+    return;
+  }
 
   setupBle();
 }
@@ -157,6 +128,25 @@ void loop() {
   }
 }
 
+bool captureFrameJPEG(std::vector<uint8_t>& outJpeg) {
+  
+  if (!CoreS3.Camera.get()) {
+    Serial.println("Failed to get a camera frame.");
+    return false;
+  }
+
+  uint8_t* out_jpg = NULL;
+  size_t out_jpg_len = 0;
+  frame2jpg(CoreS3.Camera.fb, 255, &out_jpg, &out_jpg_len);
+
+  Serial.printf("captured: %d\n", out_jpg_len);
+
+  outJpeg.assign(out_jpg, out_jpg + out_jpg_len);
+  free(out_jpg);
+  CoreS3.Camera.free();
+  return true;
+}
+
 /* ================ BLE Helpers ================ */
 void setupBle() {
   M5.Lcd.setCursor(0, 20);
@@ -165,8 +155,6 @@ void setupBle() {
 
   BLEDevice::init(SERVER_NAME);
   BLEDevice::setMTU(517);  // Request full L2CAP throughput.
-
-  ensureJpegLoaded();
 
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -187,12 +175,16 @@ void setupBle() {
   pJpegCharacteristic = pService->createCharacteristic(
     JPEG_CHARACTERISTIC_UUID,
     BLECharacteristic::PROPERTY_NOTIFY |
+    BLECharacteristic::PROPERTY_INDICATE |
     BLECharacteristic::PROPERTY_READ
   );
-  pJpegCharacteristic->addDescriptor(new BLE2902());
   BLEDescriptor *jpegDescriptor = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
   jpegDescriptor->setValue("image/jpeg");
   pJpegCharacteristic->addDescriptor(jpegDescriptor);
+  BLE2902 *jpegCccd = new BLE2902();
+  jpegCccd->setNotifications(true);
+  jpegCccd->setIndications(true);
+  pJpegCharacteristic->addDescriptor(jpegCccd);
 
   pService->start();
 
@@ -210,31 +202,89 @@ void sendJpegToCentral() {
     return;
   }
 
-  if (gJpegBuffer.empty()) {
-    M5.Lcd.println("JPEG missing");
+  BLE2902 *cccd = (BLE2902 *)pJpegCharacteristic->getDescriptorByUUID((uint16_t)0x2902);
+  if (cccd == nullptr) {
+    Serial.println("CCCD descriptor missing");
+    M5.Lcd.println("CCCD missing");
+  }
+
+  std::vector<uint8_t> outJpeg;
+  if (!captureFrameJPEG(outJpeg)) {
+    Serial.println("Failed to capture camera image.");
     return;
   }
 
-  uint16_t mtu = BLEDevice::getMTU();
-  size_t payloadSize = mtu > 3 ? mtu - 3 : 20;  // Subtract ATT header bytes.
-  if (payloadSize == 0) {
+  const uint32_t totalSize = static_cast<uint32_t>(outJpeg.size());
+  Serial.printf("JPEG size: %lu bytes\n", static_cast<unsigned long>(totalSize));
+
+  uint8_t header[8];
+  header[0] = 'J';
+  header[1] = 'P';
+  header[2] = 'E';
+  header[3] = 'G';
+  header[4] = (totalSize >> 24) & 0xFF;
+  header[5] = (totalSize >> 16) & 0xFF;
+  header[6] = (totalSize >> 8) & 0xFF;
+  header[7] = totalSize & 0xFF;
+
+  uint16_t negotiatedMtu = 23;
+  if (pServer != nullptr) {
+    const uint16_t connId = pServer->getConnId();
+    const uint16_t peerMtu = pServer->getPeerMTU(connId);
+    if (peerMtu > 0) {
+      negotiatedMtu = peerMtu;
+    }
+  }
+
+  size_t payloadSize = negotiatedMtu > 3 ? negotiatedMtu - 3 : 20;
+  if (payloadSize > 180) {
+    payloadSize = 180;
+  }
+  if (payloadSize < 20) {
     payloadSize = 20;
+  }
+  Serial.printf("MTU negotiated: %u, payload chunk: %u bytes\n",
+                static_cast<unsigned>(negotiatedMtu),
+                static_cast<unsigned>(payloadSize));
+
+  if (!notifyChunk(pJpegCharacteristic, header, sizeof(header))) {
+    Serial.println("Failed to send JPEG header");
+    return;
   }
 
   size_t offset = 0;
   size_t chunkIndex = 0;
-  const size_t totalChunks = (gJpegBuffer.size() + payloadSize - 1) / payloadSize;
+  const size_t totalChunks = (outJpeg.size() + payloadSize - 1) / payloadSize;
 
-  while (offset < gJpegBuffer.size() && deviceConnected) {
-    const size_t chunk = std::min(payloadSize, gJpegBuffer.size() - offset);
-    pJpegCharacteristic->setValue(&gJpegBuffer[offset], chunk);
-    pJpegCharacteristic->notify();
+  while (offset < outJpeg.size() && deviceConnected) {
+    const size_t chunk = std::min(payloadSize, outJpeg.size() - offset);
+    if (!notifyChunk(pJpegCharacteristic, &outJpeg[offset], chunk)) {
+      Serial.printf("Chunk send failed at %u/%u\n",
+                    static_cast<unsigned>(chunkIndex + 1),
+                    static_cast<unsigned>(totalChunks));
+      break;
+    }
     offset += chunk;
     chunkIndex += 1;
-    delay(15);  // Give the stack time to flush notifications.
+    if ((chunkIndex % 20) == 0 || chunkIndex == totalChunks) {
+      Serial.printf("Chunk %u/%u sent (%u bytes total)\n",
+                    static_cast<unsigned>(chunkIndex),
+                    static_cast<unsigned>(totalChunks),
+                    static_cast<unsigned>(offset));
+    }
   }
 
+  const bool transferComplete = (chunkIndex == totalChunks) && (offset == outJpeg.size());
+  if (!transferComplete) {
+    Serial.printf("JPEG transfer incomplete (%u/%u chunks)\n",
+                  static_cast<unsigned>(chunkIndex),
+                  static_cast<unsigned>(totalChunks));
+  }
   M5.Lcd.setCursor(0, 200);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.printf("JPEG sent (%u/%u)\n", static_cast<unsigned>(chunkIndex), static_cast<unsigned>(totalChunks));
+  M5.Lcd.printf("JPEG %s %luB (%u/%u)\n",
+                transferComplete ? "sent" : "partial",
+                static_cast<unsigned long>(outJpeg.size()),
+                static_cast<unsigned>(chunkIndex),
+                static_cast<unsigned>(totalChunks));
 }
