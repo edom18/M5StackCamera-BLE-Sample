@@ -1,8 +1,6 @@
 //
 //  BLEJpegSample.swift
-//  BLE-jpg-sample
-//
-//  Created by Kazuya Hiruma on 2025/10/08.
+//  BLE JPEG central helper for M5CoreS3 sample
 //
 
 import Foundation
@@ -51,7 +49,7 @@ public final class BLEJpegSample: NSObject, ObservableObject {
   private var headerBuffer = Data()
   private var expectedImageLength: Int?
   private var chunkTimeoutWorkItem: DispatchWorkItem?
-  private let chunkTimeout: TimeInterval = 1.0
+  private let chunkTimeout: TimeInterval = 0.35
 
   public init(queue: DispatchQueue = DispatchQueue(label: "ble.jpeg.central")) {
     self.centralQueue = queue
@@ -187,15 +185,16 @@ public final class BLEJpegSample: NSObject, ObservableObject {
   private func scheduleTransferCompletion() {
     chunkTimeoutWorkItem?.cancel()
     let workItem = DispatchWorkItem { [weak self] in
-      self?.centralQueue.async {
-        self?.finalizeTransfer()
-      }
+      guard let self = self else { return }
+      print("[BLEJpegSample] Chunk timeout fired, finalizing transfer")
+      self.finalizeTransfer()
     }
     chunkTimeoutWorkItem = workItem
     centralQueue.asyncAfter(deadline: .now() + chunkTimeout, execute: workItem)
   }
 
   private func handleJpegNotification(_ data: Data) {
+    print("[BLEJpegSample] Received notification with \(data.count) bytes")
     if expectedImageLength == nil {
       headerBuffer.append(data)
       let requiredHeaderBytes = 8
@@ -368,13 +367,16 @@ extension BLEJpegSample: CBPeripheralDelegate {
       case jpegCharacteristicUUID:
         jpegCharacteristic = characteristic
         peripheral.setNotifyValue(true, for: characteristic)
-        updateState(.subscribed)
-    updateStatus("Subscribed to JPEG notifications")
-    print("[BLEJpegSample] CCCD subscription state: notify=\(characteristic.properties.contains(.notify)) isNotifying=\(characteristic.isNotifying)")
-  default:
-    continue
-  }
-}
+        updateStatus("Subscribing to JPEG notifications")
+        print("[BLEJpegSample] CCCD subscription state: notify=\(characteristic.properties.contains(.notify)) isNotifying=\(characteristic.isNotifying)")
+      default:
+        continue
+      }
+    }
+    
+    if controlCharacteristic != nil && jpegCharacteristic != nil {
+      updateState(.subscribed)
+      updateStatus("Ready for JPEG transfer")
   }
 
   public func peripheral(_ peripheral: CBPeripheral,
@@ -385,7 +387,16 @@ extension BLEJpegSample: CBPeripheralDelegate {
       print("[BLEJpegSample] CCCD update error: \(error.localizedDescription)")
       return
     }
-    if characteristic.isNotifying {
+    if characteristic.uuid == jpegCharacteristicUUID {
+      if characteristic.isNotifying {
+        updateState(.subscribed)
+        updateStatus("JPEG notifications active")
+        print("[BLEJpegSample] JPEG notifications are now active")
+      } else {
+        updateStatus("JPEG notifications stopped")
+        print("[BLEJpegSample] JPEG notifications stopped")
+      }
+    } else if characteristic.isNotifying {
       updateStatus("Notify active for \(characteristic.uuid.uuidString)")
       print("[BLEJpegSample] Notify active for \(characteristic.uuid.uuidString)")
     } else {
