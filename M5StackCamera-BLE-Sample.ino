@@ -193,7 +193,7 @@ void loop() {
 
   if (isSending) {
     sendJpegToCentral();
-    delay(50);
+    // delay(50);
   }
 }
 
@@ -249,7 +249,7 @@ void setupBle() {
     BLECharacteristic::PROPERTY_INDICATE
   );
   pJpegCharacteristic->addDescriptor(new BLE2902());
-  pJpegCharacteristic->setCallbacks(new JpegCharacteristicCallbacks());
+  // pJpegCharacteristic->setCallbacks(new JpegCharacteristicCallbacks());
   // BLEDescriptor *jpegDescriptor = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
   // jpegDescriptor->setValue("image/jpeg");
   // pJpegCharacteristic->addDescriptor(jpegDescriptor);
