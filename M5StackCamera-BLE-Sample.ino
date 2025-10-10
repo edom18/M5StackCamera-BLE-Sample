@@ -10,11 +10,12 @@
 #include <string>
 #include <vector>
 
-#define SERVICE_UUID                 "FE55"
+#define SERVICE_UUID                 "FE56"
 #define CONTROL_CHARACTERISTIC_UUID  "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define JPEG_CHARACTERISTIC_UUID     "c9d1cba2-1f32-4fb0-b6bc-9b73c7d8b4e2"
-#define SERVER_NAME                  "M5CoreS3"
+#define SERVER_NAME                  "M5CoreS3_v2"
 
+int count = 0;
 
 /* ================ BLE State ================ */
 BLEServer *pServer = nullptr;
@@ -25,7 +26,17 @@ static std::vector<uint8_t> gJpegBuffer;
 
 int counter = 0;
 
+uint16_t negotiatedMtu = 23;
+size_t payloadSize = 20;
+bool isSending = false;
+
+size_t offset = 0;
+size_t chunkIndex = 0;
+size_t totalChunks = 0;
+
+void prepareSendJpegToCentral();
 void sendJpegToCentral();
+void sendResponse();
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
@@ -40,11 +51,23 @@ class MyServerCallbacks : public BLEServerCallbacks {
     M5.Lcd.setCursor(0, 0);
     M5.Lcd.setTextSize(2);
     M5.Lcd.println("disconnect");
+    Serial.println("=== BLE DISCONNECTED ===");
     deviceConnected = false;
     BLEAdvertising *advertising = server->getAdvertising();
     if (advertising != nullptr) {
       advertising->start();
     }
+  }
+
+  void onMtuChanged(BLEServer *pServer, esp_ble_gatts_cb_param_t *param) override {
+    Serial.println("On MTU changed.");
+
+    if (!param) {
+      return;
+    }
+
+    uint16_t mtu = param->mtu.mtu;
+    Serial.printf("MTU=%u\n", mtu);
   }
 };
 
@@ -56,6 +79,8 @@ class ControlCallbacks : public BLECharacteristicCallbacks {
   }
 
   void onWrite(BLECharacteristic *characteristic) override {
+    if (isSending) return;
+
     String value = characteristic->getValue();
     M5.Lcd.setCursor(0, 160);
     M5.Lcd.setTextSize(3);
@@ -65,28 +90,37 @@ class ControlCallbacks : public BLECharacteristicCallbacks {
     if (value == "SEND_JPEG") {
       M5.Lcd.setTextSize(2);
       M5.Lcd.println("JPEG start");
-      sendJpegToCentral();
-      M5.Lcd.println("JPEG done");
+      prepareSendJpegToCentral();
+      // sendResponse();
     }
   }
 };
 
-static bool notifyChunk(BLECharacteristic *characteristic,
-                        const uint8_t *data,
-                        size_t length,
-                        uint32_t gapMs = 20) {
-  if (!deviceConnected || characteristic == nullptr || data == nullptr || length == 0) {
+///
+/// チャンクをひとつ分送信
+///
+static bool notifyChunk(BLECharacteristic *characteristic, const uint8_t *data, size_t length) {
+  if (!deviceConnected) {
+    Serial.println("notifyChunk: device not connected");
     return false;
   }
-  characteristic->setValue(const_cast<uint8_t *>(data), length);
-  size_t storedLength = characteristic->getLength();
-  Serial.printf("notify len=%u stored=%u first=%02X%02X\n",
-                static_cast<unsigned>(length),
-                static_cast<unsigned>(storedLength),
-                length > 0 ? data[0] : 0,
-                length > 1 ? data[1] : 0);
-  characteristic->notify();
-  delay(gapMs);
+  if (characteristic == nullptr) {
+    Serial.println("notifyChunk: characteristic is null");
+    return false;
+  }
+  if (data == nullptr || length == 0) {
+    Serial.println("notifyChunk: invalid data");
+    return false;
+  }
+
+  characteristic->setValue(const_cast<uint8_t*>(data), length);
+  characteristic->indicate();
+
+  if (!deviceConnected) {
+    Serial.println("notifyChunk: connection lost during notify");
+    return false;
+  }
+
   return true;
 }
 
@@ -116,18 +150,15 @@ void loop() {
     return;
   }
 
-  if (CoreS3.BtnPWR.wasClicked()) {
-    pControlCharacteristic->setValue(counter);
-    pControlCharacteristic->notify();
-    M5.Lcd.setCursor(0, 60);
-    M5.Lcd.setTextSize(3);
-    M5.Lcd.println("notify");
-    M5.Lcd.setTextSize(5);
-    M5.Lcd.println(counter);
-    counter += 1;
+  if (isSending) {
+    sendJpegToCentral();
+    delay(50);
   }
 }
 
+///
+/// 現在のカメラの状況をキャプチャ
+///
 bool captureFrameJPEG(std::vector<uint8_t>& outJpeg) {
   
   if (!CoreS3.Camera.get()) {
@@ -139,7 +170,7 @@ bool captureFrameJPEG(std::vector<uint8_t>& outJpeg) {
   size_t out_jpg_len = 0;
   frame2jpg(CoreS3.Camera.fb, 255, &out_jpg, &out_jpg_len);
 
-  Serial.printf("captured: %d\n", out_jpg_len);
+  // Serial.printf("captured: %d\n", out_jpg_len);
 
   outJpeg.assign(out_jpg, out_jpg + out_jpg_len);
   free(out_jpg);
@@ -154,7 +185,6 @@ void setupBle() {
   M5.Lcd.println("Init BLE");
 
   BLEDevice::init(SERVER_NAME);
-  BLEDevice::setMTU(517);  // Request full L2CAP throughput.
 
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -166,25 +196,21 @@ void setupBle() {
     BLECharacteristic::PROPERTY_READ |
     BLECharacteristic::PROPERTY_WRITE |
     BLECharacteristic::PROPERTY_WRITE_NR |
-    BLECharacteristic::PROPERTY_NOTIFY |
-    BLECharacteristic::PROPERTY_INDICATE
+    BLECharacteristic::PROPERTY_NOTIFY
   );
   pControlCharacteristic->setCallbacks(new ControlCallbacks());
   pControlCharacteristic->addDescriptor(new BLE2902());
 
   pJpegCharacteristic = pService->createCharacteristic(
     JPEG_CHARACTERISTIC_UUID,
-    BLECharacteristic::PROPERTY_NOTIFY |
-    BLECharacteristic::PROPERTY_INDICATE |
-    BLECharacteristic::PROPERTY_READ
+    // BLECharacteristic::PROPERTY_NOTIFY   |
+    BLECharacteristic::PROPERTY_READ     |
+    BLECharacteristic::PROPERTY_INDICATE
   );
-  BLEDescriptor *jpegDescriptor = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
-  jpegDescriptor->setValue("image/jpeg");
-  pJpegCharacteristic->addDescriptor(jpegDescriptor);
-  BLE2902 *jpegCccd = new BLE2902();
-  jpegCccd->setNotifications(true);
-  jpegCccd->setIndications(true);
-  pJpegCharacteristic->addDescriptor(jpegCccd);
+  pJpegCharacteristic->addDescriptor(new BLE2902());
+  // BLEDescriptor *jpegDescriptor = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+  // jpegDescriptor->setValue("image/jpeg");
+  // pJpegCharacteristic->addDescriptor(jpegDescriptor);
 
   pService->start();
 
@@ -196,38 +222,143 @@ void setupBle() {
   M5.Lcd.println("BLE ready");
 }
 
+void sendResponse() {
+  count++;
+  Serial.printf("Sending response: %d\n", count);
+  
+  char buffer[32];
+  sprintf(buffer, "Hi, there! %d", count); 
+
+  pJpegCharacteristic->setValue(buffer);
+  pJpegCharacteristic->indicate();
+}
+
+///
+/// CCCD をチェック
+///
+bool checkCCCD() {
+  BLE2902 *cccd = (BLE2902 *)pJpegCharacteristic->getDescriptorByUUID((uint16_t)0x2902);
+  if (cccd == nullptr) {
+    Serial.println("CCCD descriptor missing");
+    M5.Lcd.println("CCCD missing");
+    return false;
+  }
+
+  // Check CCCD value
+  uint8_t* cccdValue = cccd->getValue();
+  uint16_t cccdLen = cccd->getLength();
+  Serial.printf("CCCD length=%u value=", cccdLen);
+  for (int i = 0; i < cccdLen; i++) {
+    Serial.printf("%02X", cccdValue[i]);
+  }
+  
+  bool notifyEnabled = (cccdLen >= 1 && (cccdValue[0] & 0x01) != 0);
+  bool indicateEnabled = (cccdLen >= 1 && (cccdValue[0] & 0x02) != 0);
+  Serial.printf("CCCD state: notify=%d indicate=%d\n", notifyEnabled, indicateEnabled);
+
+  if (!notifyEnabled && !indicateEnabled) {
+    Serial.println("ERROR: Client has not enabled notifications/indications");
+    M5.Lcd.println("CCCD not enabled");
+    return false;
+  }
+
+  return true;
+}
+
+///
+/// パラメータをリセット
+///
+void resetParams() {
+  offset = 0;
+  chunkIndex = 0;
+  totalChunks = 0;
+  isSending = false;
+}
+
+///
+/// 1 チャンクの送信処理
+///
 void sendJpegToCentral() {
+  const size_t chunk = std::min(payloadSize, gJpegBuffer.size() - offset);
+  if (!notifyChunk(pJpegCharacteristic, &gJpegBuffer[offset], chunk)) {
+    Serial.printf("Chunk send failed at %u/%u (disconnected=%d)\n",
+                  static_cast<unsigned>(chunkIndex + 1),
+                  static_cast<unsigned>(totalChunks),
+                  !deviceConnected);
+    // 送信失敗時はすべてをリセット
+    resetParams();
+    return;
+  }
+
+  offset += chunk;
+  chunkIndex += 1;
+  if ((chunkIndex % 10) == 0 || chunkIndex == totalChunks || chunkIndex <= 3) {
+    Serial.printf("Chunk %u/%u sent (%u bytes total)\n",
+                  static_cast<unsigned>(chunkIndex),
+                  static_cast<unsigned>(totalChunks),
+                  static_cast<unsigned>(offset));
+  }
+
+  // まだ送信しきっていない場合は次の送信につなげる
+  if (offset < gJpegBuffer.size() && deviceConnected) {
+    return;
+  }
+
+  const bool transferComplete = (chunkIndex == totalChunks) && (offset == gJpegBuffer.size());
+  if (!transferComplete) {
+    Serial.printf("JPEG transfer incomplete (%u/%u chunks)\n",
+                  static_cast<unsigned>(chunkIndex),
+                  static_cast<unsigned>(totalChunks));
+    // 送信失敗時はすべてをリセット
+    resetParams();
+
+    return;
+  }
+
+  Serial.println("Has been sent.");
+
+  M5.Lcd.setCursor(0, 200);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.printf("JPEG %s %luB (%u/%u)\n",
+                transferComplete ? "sent" : "partial",
+                static_cast<unsigned long>(offset),
+                static_cast<unsigned>(chunkIndex),
+                static_cast<unsigned>(totalChunks));
+
+  Serial.printf("JPEG %s %luB (%u/%u)\n",
+              transferComplete ? "sent" : "partial",
+              static_cast<unsigned long>(offset),
+              static_cast<unsigned>(chunkIndex),
+              static_cast<unsigned>(totalChunks));
+
+  resetParams();
+}
+
+///
+/// 画像送信の準備
+///
+void prepareSendJpegToCentral() {
   if (!deviceConnected || pJpegCharacteristic == nullptr) {
     M5.Lcd.println("No central");
     return;
   }
 
-  BLE2902 *cccd = (BLE2902 *)pJpegCharacteristic->getDescriptorByUUID((uint16_t)0x2902);
-  if (cccd == nullptr) {
-    Serial.println("CCCD descriptor missing");
-    M5.Lcd.println("CCCD missing");
+  if (!checkCCCD()) {
+    return;
   }
 
-  std::vector<uint8_t> outJpeg;
-  if (!captureFrameJPEG(outJpeg)) {
+  // Wait a bit to ensure BLE connection is stable after CCCD write
+  Serial.println("Waiting for BLE connection to stabilize...");
+
+  gJpegBuffer.clear();
+  if (!captureFrameJPEG(gJpegBuffer)) {
     Serial.println("Failed to capture camera image.");
     return;
   }
 
-  const uint32_t totalSize = static_cast<uint32_t>(outJpeg.size());
+  const uint32_t totalSize = static_cast<uint32_t>(gJpegBuffer.size());
   Serial.printf("JPEG size: %lu bytes\n", static_cast<unsigned long>(totalSize));
 
-  uint8_t header[8];
-  header[0] = 'J';
-  header[1] = 'P';
-  header[2] = 'E';
-  header[3] = 'G';
-  header[4] = (totalSize >> 24) & 0xFF;
-  header[5] = (totalSize >> 16) & 0xFF;
-  header[6] = (totalSize >> 8) & 0xFF;
-  header[7] = totalSize & 0xFF;
-
-  uint16_t negotiatedMtu = 23;
   if (pServer != nullptr) {
     const uint16_t connId = pServer->getConnId();
     const uint16_t peerMtu = pServer->getPeerMTU(connId);
@@ -236,10 +367,7 @@ void sendJpegToCentral() {
     }
   }
 
-  size_t payloadSize = negotiatedMtu > 3 ? negotiatedMtu - 3 : 20;
-  if (payloadSize > 180) {
-    payloadSize = 180;
-  }
+  payloadSize = negotiatedMtu > 3 ? negotiatedMtu - 3 : 20;
   if (payloadSize < 20) {
     payloadSize = 20;
   }
@@ -247,44 +375,27 @@ void sendJpegToCentral() {
                 static_cast<unsigned>(negotiatedMtu),
                 static_cast<unsigned>(payloadSize));
 
+  // 準備としてまずはヘッダーを送信する
+  uint8_t header[8];
+  header[0] = 'J';
+  header[1] = 'P';
+  header[2] = 'E';
+  header[3] = 'G';
+  // サイズをパック
+  header[4] = (totalSize >> 24) & 0xFF;
+  header[5] = (totalSize >> 16) & 0xFF;
+  header[6] = (totalSize >> 8) & 0xFF;
+  header[7] = totalSize & 0xFF;
+
   if (!notifyChunk(pJpegCharacteristic, header, sizeof(header))) {
     Serial.println("Failed to send JPEG header");
     return;
   }
 
-  size_t offset = 0;
-  size_t chunkIndex = 0;
-  const size_t totalChunks = (outJpeg.size() + payloadSize - 1) / payloadSize;
+  // 送信のための情報を初期化
+  offset = 0;
+  chunkIndex = 0;
+  totalChunks = (gJpegBuffer.size() + payloadSize - 1) / payloadSize;
 
-  while (offset < outJpeg.size() && deviceConnected) {
-    const size_t chunk = std::min(payloadSize, outJpeg.size() - offset);
-    if (!notifyChunk(pJpegCharacteristic, &outJpeg[offset], chunk)) {
-      Serial.printf("Chunk send failed at %u/%u\n",
-                    static_cast<unsigned>(chunkIndex + 1),
-                    static_cast<unsigned>(totalChunks));
-      break;
-    }
-    offset += chunk;
-    chunkIndex += 1;
-    if ((chunkIndex % 20) == 0 || chunkIndex == totalChunks) {
-      Serial.printf("Chunk %u/%u sent (%u bytes total)\n",
-                    static_cast<unsigned>(chunkIndex),
-                    static_cast<unsigned>(totalChunks),
-                    static_cast<unsigned>(offset));
-    }
-  }
-
-  const bool transferComplete = (chunkIndex == totalChunks) && (offset == outJpeg.size());
-  if (!transferComplete) {
-    Serial.printf("JPEG transfer incomplete (%u/%u chunks)\n",
-                  static_cast<unsigned>(chunkIndex),
-                  static_cast<unsigned>(totalChunks));
-  }
-  M5.Lcd.setCursor(0, 200);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.printf("JPEG %s %luB (%u/%u)\n",
-                transferComplete ? "sent" : "partial",
-                static_cast<unsigned long>(outJpeg.size()),
-                static_cast<unsigned>(chunkIndex),
-                static_cast<unsigned>(totalChunks));
+  isSending = true;
 }
