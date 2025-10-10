@@ -186,6 +186,12 @@ void loop() {
     return;
   }
 
+  if (!isSending) {
+    if (CoreS3.Camera.get()) {
+      CoreS3.Camera.free();
+    }
+  }
+
   if (needsSendHeader) {
     sendHedaerToCentral();
     return;
