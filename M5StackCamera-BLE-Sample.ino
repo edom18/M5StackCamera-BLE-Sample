@@ -29,14 +29,17 @@ int counter = 0;
 uint16_t negotiatedMtu = 23;
 size_t payloadSize = 20;
 bool isSending = false;
+bool needsSendHeader = false;
 
 size_t offset = 0;
 size_t chunkIndex = 0;
 size_t totalChunks = 0;
+uint32_t totalSize = 0;
 
 void prepareSendJpegToCentral();
 void sendJpegToCentral();
 void sendResponse();
+void resetParams();
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
@@ -96,20 +99,53 @@ class ControlCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
+class JpegCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onStatus(BLECharacteristic* characteristic, Status s, uint32_t code) override {
+    Serial.printf("s=%d, code=%d\n", s, code);
+    
+    switch (s) {
+      case Status::SUCCESS_INDICATE:
+        Serial.println("Incidate confirmed by client.");
+        break;
+      case Status::SUCCESS_NOTIFY:
+        Serial.println("Notify success.");
+        break;
+      case Status::ERROR_INDICATE_DISABLED:
+        Serial.println("Incidate disabled.");
+        break;
+      case Status::ERROR_NOTIFY_DISABLED:
+        Serial.println("Notify disabled.");
+        break;
+      case Status::ERROR_GATT:
+        Serial.println("Error GATT.");
+        break;
+      case Status::ERROR_NO_CLIENT:
+        Serial.println("No Client.");
+        break;
+      case Status::ERROR_INDICATE_TIMEOUT:
+        Serial.println("Indicate timeout.");
+        break;
+      case Status::ERROR_INDICATE_FAILURE:
+        Serial.println("Indicate failure.");
+        break;
+    }
+  }
+};
+
 ///
 /// チャンクをひとつ分送信
 ///
-static bool notifyChunk(BLECharacteristic *characteristic, const uint8_t *data, size_t length) {
+static bool sendChunk(BLECharacteristic *characteristic, const uint8_t *data, size_t length) {
   if (!deviceConnected) {
-    Serial.println("notifyChunk: device not connected");
+    Serial.println("sendChunk: device not connected");
     return false;
   }
   if (characteristic == nullptr) {
-    Serial.println("notifyChunk: characteristic is null");
+    Serial.println("sendChunk: characteristic is null");
     return false;
   }
   if (data == nullptr || length == 0) {
-    Serial.println("notifyChunk: invalid data");
+    Serial.println("sendChunk: invalid data");
     return false;
   }
 
@@ -117,7 +153,7 @@ static bool notifyChunk(BLECharacteristic *characteristic, const uint8_t *data, 
   characteristic->indicate();
 
   if (!deviceConnected) {
-    Serial.println("notifyChunk: connection lost during notify");
+    Serial.println("sendChunk: connection lost during notify");
     return false;
   }
 
@@ -147,6 +183,11 @@ void loop() {
   CoreS3.update();
 
   if (!deviceConnected) {
+    return;
+  }
+
+  if (needsSendHeader) {
+    sendHedaerToCentral();
     return;
   }
 
@@ -208,6 +249,7 @@ void setupBle() {
     BLECharacteristic::PROPERTY_INDICATE
   );
   pJpegCharacteristic->addDescriptor(new BLE2902());
+  pJpegCharacteristic->setCallbacks(new JpegCharacteristicCallbacks());
   // BLEDescriptor *jpegDescriptor = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
   // jpegDescriptor->setValue("image/jpeg");
   // pJpegCharacteristic->addDescriptor(jpegDescriptor);
@@ -272,7 +314,37 @@ void resetParams() {
   offset = 0;
   chunkIndex = 0;
   totalChunks = 0;
+  totalSize = 0;
   isSending = false;
+  needsSendHeader = false;
+}
+
+void sendHedaerToCentral() {
+  // 準備としてまずはヘッダーを送信する
+  uint8_t header[8];
+  header[0] = 'J';
+  header[1] = 'P';
+  header[2] = 'E';
+  header[3] = 'G';
+  // サイズをパック
+  header[4] = (totalSize >> 24) & 0xFF;
+  header[5] = (totalSize >> 16) & 0xFF;
+  header[6] = (totalSize >> 8) & 0xFF;
+  header[7] = totalSize & 0xFF;
+
+  if (!sendChunk(pJpegCharacteristic, header, sizeof(header))) {
+    Serial.println("Failed to send JPEG header");
+    resetParams();
+    return;
+  }
+
+  // 送信のための情報を初期化
+  offset = 0;
+  chunkIndex = 0;
+  totalChunks = (gJpegBuffer.size() + payloadSize - 1) / payloadSize;
+
+  needsSendHeader = false;
+  isSending = true;
 }
 
 ///
@@ -280,7 +352,7 @@ void resetParams() {
 ///
 void sendJpegToCentral() {
   const size_t chunk = std::min(payloadSize, gJpegBuffer.size() - offset);
-  if (!notifyChunk(pJpegCharacteristic, &gJpegBuffer[offset], chunk)) {
+  if (!sendChunk(pJpegCharacteristic, &gJpegBuffer[offset], chunk)) {
     Serial.printf("Chunk send failed at %u/%u (disconnected=%d)\n",
                   static_cast<unsigned>(chunkIndex + 1),
                   static_cast<unsigned>(totalChunks),
@@ -356,7 +428,7 @@ void prepareSendJpegToCentral() {
     return;
   }
 
-  const uint32_t totalSize = static_cast<uint32_t>(gJpegBuffer.size());
+  totalSize = static_cast<uint32_t>(gJpegBuffer.size());
   Serial.printf("JPEG size: %lu bytes\n", static_cast<unsigned long>(totalSize));
 
   if (pServer != nullptr) {
@@ -375,27 +447,5 @@ void prepareSendJpegToCentral() {
                 static_cast<unsigned>(negotiatedMtu),
                 static_cast<unsigned>(payloadSize));
 
-  // 準備としてまずはヘッダーを送信する
-  uint8_t header[8];
-  header[0] = 'J';
-  header[1] = 'P';
-  header[2] = 'E';
-  header[3] = 'G';
-  // サイズをパック
-  header[4] = (totalSize >> 24) & 0xFF;
-  header[5] = (totalSize >> 16) & 0xFF;
-  header[6] = (totalSize >> 8) & 0xFF;
-  header[7] = totalSize & 0xFF;
-
-  if (!notifyChunk(pJpegCharacteristic, header, sizeof(header))) {
-    Serial.println("Failed to send JPEG header");
-    return;
-  }
-
-  // 送信のための情報を初期化
-  offset = 0;
-  chunkIndex = 0;
-  totalChunks = (gJpegBuffer.size() + payloadSize - 1) / payloadSize;
-
-  isSending = true;
+  needsSendHeader = true;
 }
