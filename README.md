@@ -1,3 +1,5 @@
+<img src="images/key-visual.jpg" widht="512px" />
+
 # M5Stack CoreS3 Camera → iPhone BLE 転送サンプル
 
 M5Stack CoreS3 のカメラ映像を iPhone に BLE で転送するサンプルです。CoreS3 側は JPEG をオンデマンドでキャプチャし、GATT 特性を介して分割送信します。iOS 側は同梱の Swift ヘルパーで受信・復元して画面表示します。
