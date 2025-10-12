@@ -252,6 +252,9 @@ bool captureFrameJPEG(std::vector<uint8_t>& outJpeg) {
 }
 
 void log(String message) {
+  int x = logCursorX;
+  int y = CoreS3.Display.getCursorY();
+  CoreS3.Display.setCursor(x, y);
   CoreS3.Display.printf("%s\n", message.c_str());
 }
 
@@ -420,7 +423,7 @@ void sendJpegToCentral() {
 
   Serial.println("Has been sent.");
   log("Has been sent");
-  
+
   // CoreS3.Display.printf("JPEG %s %luB (%u/%u)\n",
   //               transferComplete ? "sent" : "partial",
   //               static_cast<unsigned long>(offset),
