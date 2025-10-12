@@ -29,6 +29,7 @@ uint16_t negotiatedMtu = 23;
 size_t payloadSize = 20;
 bool isSending = false;
 bool needsSendHeader = false;
+bool needsWaitForConfirm = false;
 
 size_t offset = 0;
 size_t chunkIndex = 0;
@@ -104,7 +105,8 @@ class JpegCharacteristicCallbacks : public BLECharacteristicCallbacks {
     
     switch (s) {
       case Status::SUCCESS_INDICATE:
-        Serial.println("Incidate confirmed by client.");
+        // Serial.println("Incidate confirmed by client.");
+        needsWaitForConfirm = false;
         break;
       case Status::SUCCESS_NOTIFY:
         Serial.println("Notify success.");
@@ -134,7 +136,7 @@ class JpegCharacteristicCallbacks : public BLECharacteristicCallbacks {
 ///
 /// チャンクをひとつ分送信
 ///
-static bool sendChunk(BLECharacteristic *characteristic, const uint8_t *data, size_t length) {
+bool sendChunk(BLECharacteristic *characteristic, const uint8_t *data, size_t length) {
   if (!deviceConnected) {
     Serial.println("sendChunk: device not connected");
     return false;
@@ -147,6 +149,12 @@ static bool sendChunk(BLECharacteristic *characteristic, const uint8_t *data, si
     Serial.println("sendChunk: invalid data");
     return false;
   }
+
+  if (needsWaitForConfirm) {
+    return false;
+  }
+
+  needsWaitForConfirm = true;
 
   characteristic->setValue(const_cast<uint8_t*>(data), length);
   characteristic->indicate();
@@ -294,7 +302,7 @@ void setupBle() {
     BLECharacteristic::PROPERTY_INDICATE
   );
   pJpegCharacteristic->addDescriptor(new BLE2902());
-  // pJpegCharacteristic->setCallbacks(new JpegCharacteristicCallbacks());
+  pJpegCharacteristic->setCallbacks(new JpegCharacteristicCallbacks());
   // BLEDescriptor *jpegDescriptor = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
   // jpegDescriptor->setValue("image/jpeg");
   // pJpegCharacteristic->addDescriptor(jpegDescriptor);
@@ -385,6 +393,8 @@ void sendHedaerToCentral() {
 /// 1 チャンクの送信処理
 ///
 void sendJpegToCentral() {
+  if (needsWaitForConfirm) return;
+
   const size_t chunk = std::min(payloadSize, gJpegBuffer.size() - offset);
   if (!sendChunk(pJpegCharacteristic, &gJpegBuffer[offset], chunk)) {
     Serial.printf("Chunk send failed at %u/%u (disconnected=%d)\n",
