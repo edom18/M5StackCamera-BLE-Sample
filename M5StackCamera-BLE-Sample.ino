@@ -13,7 +13,7 @@
 #define SERVICE_UUID                 "FE56"
 #define CONTROL_CHARACTERISTIC_UUID  "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define JPEG_CHARACTERISTIC_UUID     "c9d1cba2-1f32-4fb0-b6bc-9b73c7d8b4e2"
-#define SERVER_NAME                  "M5CoreS3_v2"
+#define SERVER_NAME                  "M5CoreS3"
 
 static LGFX_Sprite spr;
 static bool inited = false;
