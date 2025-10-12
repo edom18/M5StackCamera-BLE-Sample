@@ -59,7 +59,7 @@ M5Stack CoreS3 のカメラ映像を iPhone に BLE で転送するサンプル�
 ## 設定・調整ポイント
 - 画像品質: `captureFrameJPEG(gJpegBuffer, 80)` の第2引数（1–100）で調整
 - チャンクサイズ: 交渉 MTU に基づき自動計算（`payload = MTU - 3`、下限 20B）
-- サーバ名（アドバタイズ名）: `SERVER_NAME` 定数で変更可能（デフォルト: `M5CoreS3_v2`）
+- サーバ名（アドバタイズ名）: `SERVER_NAME` 定数で変更可能（デフォルト: `M5CoreS3`）
 - ログ表示: CoreS3 LCD 下部の枠内に接続や送受信の状態を表示
 
 ## トラブルシューティング
