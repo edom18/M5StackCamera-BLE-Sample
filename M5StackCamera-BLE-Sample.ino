@@ -15,7 +15,8 @@
 #define JPEG_CHARACTERISTIC_UUID     "c9d1cba2-1f32-4fb0-b6bc-9b73c7d8b4e2"
 #define SERVER_NAME                  "M5CoreS3_v2"
 
-int count = 0;
+static LGFX_Sprite spr;
+static bool inited = false;
 
 /* ================ BLE State ================ */
 BLEServer *pServer = nullptr;
@@ -23,8 +24,6 @@ BLECharacteristic *pControlCharacteristic = nullptr;
 BLECharacteristic *pJpegCharacteristic = nullptr;
 bool deviceConnected = false;
 static std::vector<uint8_t> gJpegBuffer;
-
-int counter = 0;
 
 uint16_t negotiatedMtu = 23;
 size_t payloadSize = 20;
@@ -43,17 +42,11 @@ void resetParams();
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
-    M5.Lcd.fillScreen(BLACK);
-    M5.Lcd.setCursor(0, 0);
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.println("connect");
+    Serial.println("connect");
     deviceConnected = true;
   }
 
   void onDisconnect(BLEServer *server) override {
-    M5.Lcd.setCursor(0, 0);
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.println("disconnect");
     Serial.println("=== BLE DISCONNECTED ===");
     deviceConnected = false;
     BLEAdvertising *advertising = server->getAdvertising();
@@ -76,25 +69,25 @@ class MyServerCallbacks : public BLEServerCallbacks {
 
 class ControlCallbacks : public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic *characteristic) override {
-    M5.Lcd.println("read");
+    CoreS3.Display.println("read");
     String value = characteristic->getValue();
-    M5.Lcd.println(value.c_str());
+    CoreS3.Display.println(value.c_str());
   }
 
   void onWrite(BLECharacteristic *characteristic) override {
     if (isSending) return;
 
     String value = characteristic->getValue();
-    M5.Lcd.setCursor(0, 160);
-    M5.Lcd.setTextSize(3);
-    M5.Lcd.println("written");
-    M5.Lcd.setTextSize(5);
-    M5.Lcd.println(value.c_str());
+    // CoreS3.Display.setCursor(0, 160);
+    // CoreS3.Display.setTextSize(3);
+    // CoreS3.Display.println("written");
+    // CoreS3.Display.setTextSize(5);
+    // CoreS3.Display.println(value.c_str());
+    Serial.printf("%s\n", value.c_str());
     if (value == "SEND_JPEG") {
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.println("JPEG start");
+      // CoreS3.Display.setTextSize(2);
+      Serial.println("JPEG start");
       prepareSendJpegToCentral();
-      // sendResponse();
     }
   }
 };
@@ -163,13 +156,31 @@ static bool sendChunk(BLECharacteristic *characteristic, const uint8_t *data, si
 /* ================ Arduino ================ */
 void setupBle();
 
+void drawQuarter(const uint16_t* rgb565, int camW, int camH) {
+  if (!inited) {
+    spr.setPsram(true);
+    spr.setColorDepth(16);
+    spr.createSprite(camW, camH);
+    spr.setPivot(0, 0);
+    inited = true;
+  }
+
+  spr.pushImage(0, 0, camW, camH, rgb565);
+
+  CoreS3.Display.startWrite();
+  spr.pushRotateZoom(&CoreS3.Display, 25, 90, 0.0f, 0.5f, 0.5f);
+  CoreS3.Display.endWrite();
+}
+
 void setup() {
   Serial.begin(115200);
 
-  M5.begin();
-  M5.Lcd.setCursor(0, 0);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.println("Start!");
+  auto cfg = M5.config();
+  CoreS3.begin(cfg);
+  CoreS3.Display.setTextColor(GREEN);
+  CoreS3.Display.setTextDatum(middle_center);
+  CoreS3.Display.setFont(&fonts::Orbitron_Light_24);
+  CoreS3.Display.setTextSize(1);
 
   if (!CoreS3.Camera.begin()) {
     CoreS3.Display.drawString("Camera Init Fail", CoreS3.Display.width() / 2, CoreS3.Display.height() / 2);
@@ -182,14 +193,18 @@ void setup() {
 void loop() {
   CoreS3.update();
 
-  if (!deviceConnected) {
-    return;
-  }
-
-  if (!isSending) {
+  // if (!(needsSendHeader || isSending)) {
     if (CoreS3.Camera.get()) {
+      int w = CoreS3.Display.width();
+      int h = CoreS3.Display.height();
+      drawQuarter((uint16_t *)CoreS3.Camera.fb->buf, w, h);
+      // CoreS3.Display.pushImage(0, 0, w, h, (uint16_t *)CoreS3.Camera.fb->buf);
       CoreS3.Camera.free();
     }
+  // }
+
+  if (!deviceConnected) {
+    return;
   }
 
   if (needsSendHeader) {
@@ -199,7 +214,6 @@ void loop() {
 
   if (isSending) {
     sendJpegToCentral();
-    // delay(50);
   }
 }
 
@@ -227,9 +241,7 @@ bool captureFrameJPEG(std::vector<uint8_t>& outJpeg) {
 
 /* ================ BLE Helpers ================ */
 void setupBle() {
-  M5.Lcd.setCursor(0, 20);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.println("Init BLE");
+  CoreS3.Display.println("Init BLE");
 
   BLEDevice::init(SERVER_NAME);
 
@@ -267,18 +279,7 @@ void setupBle() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  M5.Lcd.println("BLE ready");
-}
-
-void sendResponse() {
-  count++;
-  Serial.printf("Sending response: %d\n", count);
-  
-  char buffer[32];
-  sprintf(buffer, "Hi, there! %d", count); 
-
-  pJpegCharacteristic->setValue(buffer);
-  pJpegCharacteristic->indicate();
+  CoreS3.Display.println("BLE ready");
 }
 
 ///
@@ -288,7 +289,7 @@ bool checkCCCD() {
   BLE2902 *cccd = (BLE2902 *)pJpegCharacteristic->getDescriptorByUUID((uint16_t)0x2902);
   if (cccd == nullptr) {
     Serial.println("CCCD descriptor missing");
-    M5.Lcd.println("CCCD missing");
+    CoreS3.Display.println("CCCD missing");
     return false;
   }
 
@@ -306,7 +307,7 @@ bool checkCCCD() {
 
   if (!notifyEnabled && !indicateEnabled) {
     Serial.println("ERROR: Client has not enabled notifications/indications");
-    M5.Lcd.println("CCCD not enabled");
+    CoreS3.Display.println("CCCD not enabled");
     return false;
   }
 
@@ -395,9 +396,9 @@ void sendJpegToCentral() {
 
   Serial.println("Has been sent.");
 
-  M5.Lcd.setCursor(0, 200);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.printf("JPEG %s %luB (%u/%u)\n",
+  CoreS3.Display.setCursor(0, 200);
+  CoreS3.Display.setTextSize(2);
+  CoreS3.Display.printf("JPEG %s %luB (%u/%u)\n",
                 transferComplete ? "sent" : "partial",
                 static_cast<unsigned long>(offset),
                 static_cast<unsigned>(chunkIndex),
@@ -417,7 +418,7 @@ void sendJpegToCentral() {
 ///
 void prepareSendJpegToCentral() {
   if (!deviceConnected || pJpegCharacteristic == nullptr) {
-    M5.Lcd.println("No central");
+    CoreS3.Display.println("No central");
     return;
   }
 
