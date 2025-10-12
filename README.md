@@ -1,4 +1,4 @@
-<img src="images/key-visual.jpg" widht="512px" />
+<img src="images/key-visual.png" widht="512px" />
 
 # M5Stack CoreS3 Camera → iPhone BLE 転送サンプル
 
