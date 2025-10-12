@@ -232,7 +232,7 @@ void loop() {
 ///
 /// 現在のカメラの状況をキャプチャ
 ///
-bool captureFrameJPEG(std::vector<uint8_t>& outJpeg) {
+bool captureFrameJPEG(std::vector<uint8_t>& outJpeg, uint8_t quality = 50) {
   
   if (!CoreS3.Camera.get()) {
     Serial.println("Failed to get a camera frame.");
@@ -241,7 +241,7 @@ bool captureFrameJPEG(std::vector<uint8_t>& outJpeg) {
 
   uint8_t* out_jpg = NULL;
   size_t out_jpg_len = 0;
-  frame2jpg(CoreS3.Camera.fb, 255, &out_jpg, &out_jpg_len);
+  frame2jpg(CoreS3.Camera.fb, quality, &out_jpg, &out_jpg_len);
 
   // Serial.printf("captured: %d\n", out_jpg_len);
 
@@ -457,7 +457,7 @@ void prepareSendJpegToCentral() {
   Serial.println("Waiting for BLE connection to stabilize...");
 
   gJpegBuffer.clear();
-  if (!captureFrameJPEG(gJpegBuffer)) {
+  if (!captureFrameJPEG(gJpegBuffer, 80)) {
     Serial.println("Failed to capture camera image.");
     log("Failed to capture camera image.");
     return;
