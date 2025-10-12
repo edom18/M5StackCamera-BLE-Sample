@@ -35,19 +35,30 @@ size_t chunkIndex = 0;
 size_t totalChunks = 0;
 uint32_t totalSize = 0;
 
+const int previewWindowX = 2;
+const int previewWindowY = 2;
+const int logWindowX = 1;
+const int logWindowY = 120 + 5;
+const int logCursorX = 15;
+const int logCursorY = 120 + 20;
+
 void prepareSendJpegToCentral();
 void sendJpegToCentral();
 void sendResponse();
 void resetParams();
+void log(String message);
+void clearLog();
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
     Serial.println("connect");
+    log("Connected a client.");
     deviceConnected = true;
   }
 
   void onDisconnect(BLEServer *server) override {
     Serial.println("=== BLE DISCONNECTED ===");
+    log("Disconnected a client.");
     deviceConnected = false;
     BLEAdvertising *advertising = server->getAdvertising();
     if (advertising != nullptr) {
@@ -69,24 +80,19 @@ class MyServerCallbacks : public BLEServerCallbacks {
 
 class ControlCallbacks : public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic *characteristic) override {
-    CoreS3.Display.println("read");
+    Serial.println("Control characteristic read.");
     String value = characteristic->getValue();
-    CoreS3.Display.println(value.c_str());
+    log(value);
   }
 
   void onWrite(BLECharacteristic *characteristic) override {
     if (isSending) return;
 
     String value = characteristic->getValue();
-    // CoreS3.Display.setCursor(0, 160);
-    // CoreS3.Display.setTextSize(3);
-    // CoreS3.Display.println("written");
-    // CoreS3.Display.setTextSize(5);
-    // CoreS3.Display.println(value.c_str());
-    Serial.printf("%s\n", value.c_str());
+    Serial.printf("Received control characteristic: %s\n", value.c_str());
     if (value == "SEND_JPEG") {
-      // CoreS3.Display.setTextSize(2);
-      Serial.println("JPEG start");
+      Serial.println("Command received.");
+      log("Command received.");
       prepareSendJpegToCentral();
     }
   }
@@ -156,7 +162,7 @@ static bool sendChunk(BLECharacteristic *characteristic, const uint8_t *data, si
 /* ================ Arduino ================ */
 void setupBle();
 
-void drawQuarter(const uint16_t* rgb565, int camW, int camH) {
+void drawQuarter(const uint16_t* rgb565, int x, int y, int camW, int camH, float zoom = 0.5f) {
   if (!inited) {
     spr.setPsram(true);
     spr.setColorDepth(16);
@@ -167,8 +173,12 @@ void drawQuarter(const uint16_t* rgb565, int camW, int camH) {
 
   spr.pushImage(0, 0, camW, camH, rgb565);
 
+  int w = (camW * zoom) + 2;
+  int h = (camH * zoom) + 2;
+  CoreS3.Display.drawRect(x - 1, y - 1, w, h, TFT_WHITE);
+
   CoreS3.Display.startWrite();
-  spr.pushRotateZoom(&CoreS3.Display, 25, 90, 0.0f, 0.5f, 0.5f);
+  spr.pushRotateZoom(&CoreS3.Display, x, y, 0.0f, zoom, zoom);
   CoreS3.Display.endWrite();
 }
 
@@ -177,15 +187,17 @@ void setup() {
 
   auto cfg = M5.config();
   CoreS3.begin(cfg);
-  CoreS3.Display.setTextColor(GREEN);
-  CoreS3.Display.setTextDatum(middle_center);
+  CoreS3.Display.setTextColor(TFT_WHITE);
+  CoreS3.Display.setTextDatum(top_left);
   CoreS3.Display.setFont(&fonts::Orbitron_Light_24);
-  CoreS3.Display.setTextSize(1);
+  CoreS3.Display.setTextSize(0.4f);
 
   if (!CoreS3.Camera.begin()) {
     CoreS3.Display.drawString("Camera Init Fail", CoreS3.Display.width() / 2, CoreS3.Display.height() / 2);
     return;
   }
+
+  clearLog();
 
   setupBle();
 }
@@ -195,10 +207,10 @@ void loop() {
 
   // if (!(needsSendHeader || isSending)) {
     if (CoreS3.Camera.get()) {
+      float zoom = 0.5f;
       int w = CoreS3.Display.width();
       int h = CoreS3.Display.height();
-      drawQuarter((uint16_t *)CoreS3.Camera.fb->buf, w, h);
-      // CoreS3.Display.pushImage(0, 0, w, h, (uint16_t *)CoreS3.Camera.fb->buf);
+      drawQuarter((uint16_t *)CoreS3.Camera.fb->buf, previewWindowX, previewWindowY, w, h, zoom);
       CoreS3.Camera.free();
     }
   // }
@@ -239,9 +251,21 @@ bool captureFrameJPEG(std::vector<uint8_t>& outJpeg) {
   return true;
 }
 
+void log(String message) {
+  CoreS3.Display.printf("%s\n", message.c_str());
+}
+
+void clearLog() {
+  CoreS3.Display.setCursor(logCursorX, logCursorY);
+  int w = CoreS3.Display.width() - logWindowX;
+  int h = CoreS3.Display.height() - logWindowY;
+  CoreS3.Display.fillRect(logWindowX, logWindowY, w, h, TFT_BLACK);
+  CoreS3.Display.drawRect(logWindowX, logWindowY, w, h, TFT_WHITE);
+}
+
 /* ================ BLE Helpers ================ */
 void setupBle() {
-  CoreS3.Display.println("Init BLE");
+  log("Init BLE");
 
   BLEDevice::init(SERVER_NAME);
 
@@ -279,7 +303,7 @@ void setupBle() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  CoreS3.Display.println("BLE ready");
+  log("BLE ready");
 }
 
 ///
@@ -289,7 +313,7 @@ bool checkCCCD() {
   BLE2902 *cccd = (BLE2902 *)pJpegCharacteristic->getDescriptorByUUID((uint16_t)0x2902);
   if (cccd == nullptr) {
     Serial.println("CCCD descriptor missing");
-    CoreS3.Display.println("CCCD missing");
+    log("CCCD missing");
     return false;
   }
 
@@ -307,7 +331,7 @@ bool checkCCCD() {
 
   if (!notifyEnabled && !indicateEnabled) {
     Serial.println("ERROR: Client has not enabled notifications/indications");
-    CoreS3.Display.println("CCCD not enabled");
+    log("CCCD not enabled");
     return false;
   }
 
@@ -395,14 +419,13 @@ void sendJpegToCentral() {
   }
 
   Serial.println("Has been sent.");
-
-  CoreS3.Display.setCursor(0, 200);
-  CoreS3.Display.setTextSize(2);
-  CoreS3.Display.printf("JPEG %s %luB (%u/%u)\n",
-                transferComplete ? "sent" : "partial",
-                static_cast<unsigned long>(offset),
-                static_cast<unsigned>(chunkIndex),
-                static_cast<unsigned>(totalChunks));
+  log("Has been sent");
+  
+  // CoreS3.Display.printf("JPEG %s %luB (%u/%u)\n",
+  //               transferComplete ? "sent" : "partial",
+  //               static_cast<unsigned long>(offset),
+  //               static_cast<unsigned>(chunkIndex),
+  //               static_cast<unsigned>(totalChunks));
 
   Serial.printf("JPEG %s %luB (%u/%u)\n",
               transferComplete ? "sent" : "partial",
@@ -418,7 +441,8 @@ void sendJpegToCentral() {
 ///
 void prepareSendJpegToCentral() {
   if (!deviceConnected || pJpegCharacteristic == nullptr) {
-    CoreS3.Display.println("No central");
+    Serial.println("No central");
+    log("No central");
     return;
   }
 
@@ -432,11 +456,13 @@ void prepareSendJpegToCentral() {
   gJpegBuffer.clear();
   if (!captureFrameJPEG(gJpegBuffer)) {
     Serial.println("Failed to capture camera image.");
+    log("Failed to capture camera image.");
     return;
   }
 
   totalSize = static_cast<uint32_t>(gJpegBuffer.size());
   Serial.printf("JPEG size: %lu bytes\n", static_cast<unsigned long>(totalSize));
+  // log("JPEG size: %lu bytes\n", static_cast<unsigned long>(totalSize));
 
   if (pServer != nullptr) {
     const uint16_t connId = pServer->getConnId();
